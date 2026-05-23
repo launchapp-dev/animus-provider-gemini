@@ -3,8 +3,8 @@ use std::time::Instant;
 
 use animus_plugin_protocol::{HealthCheckResult, HealthStatus};
 use animus_provider_protocol::{
-    AgentResumeRequest, AgentRunRequest, AgentRunResponse, BackendError, ProviderBackend,
-    ProviderCapabilities, ProviderManifest,
+    AgentNotification, AgentResumeRequest, AgentRunRequest, AgentRunResponse, BackendError,
+    NotificationSink, ProviderBackend, ProviderCapabilities, ProviderManifest,
 };
 use animus_session_backend::{
     lookup_binary_in_path, GeminiSessionBackend, SessionBackend, SessionEvent, SessionRequest,
@@ -86,6 +86,7 @@ impl GeminiProviderBackend {
         mut run: animus_session_backend::SessionRun,
         started: Instant,
         model_label: String,
+        sink: NotificationSink,
     ) -> Result<AgentRunResponse, BackendError> {
         let mut output = String::new();
         let mut thinking: Vec<String> = Vec::new();
@@ -98,6 +99,7 @@ impl GeminiProviderBackend {
         let mut exit_code: i32 = 0;
 
         while let Some(event) = run.events.recv().await {
+            let current_session_id = session_id.clone().unwrap_or_default();
             match event {
                 SessionEvent::Started {
                     backend,
@@ -113,12 +115,26 @@ impl GeminiProviderBackend {
                 }
                 SessionEvent::TextDelta { text } => {
                     output.push_str(&text);
+                    sink.emit(AgentNotification::Output {
+                        session_id: current_session_id,
+                        text,
+                        is_final: false,
+                    });
                 }
                 SessionEvent::FinalText { text } => {
-                    output = text;
+                    output = text.clone();
+                    sink.emit(AgentNotification::Output {
+                        session_id: current_session_id,
+                        text,
+                        is_final: true,
+                    });
                 }
                 SessionEvent::Thinking { text } => {
-                    thinking.push(text);
+                    thinking.push(text.clone());
+                    sink.emit(AgentNotification::Thinking {
+                        session_id: current_session_id,
+                        text,
+                    });
                 }
                 SessionEvent::ToolCall {
                     tool_name,
@@ -130,6 +146,12 @@ impl GeminiProviderBackend {
                         "arguments": arguments,
                         "server": server,
                     }));
+                    sink.emit(AgentNotification::ToolCall {
+                        session_id: current_session_id,
+                        name: tool_name,
+                        arguments,
+                        server,
+                    });
                 }
                 SessionEvent::ToolResult {
                     tool_name,
@@ -141,6 +163,12 @@ impl GeminiProviderBackend {
                         "output": result,
                         "success": success,
                     }));
+                    sink.emit(AgentNotification::ToolResult {
+                        session_id: current_session_id,
+                        name: tool_name,
+                        output: result,
+                        success,
+                    });
                 }
                 SessionEvent::Artifact {
                     artifact_id,
@@ -158,10 +186,15 @@ impl GeminiProviderBackend {
                     message,
                     recoverable,
                 } => {
-                    errors.push(message);
+                    errors.push(message.clone());
                     if !recoverable {
                         exit_code = 1;
                     }
+                    sink.emit(AgentNotification::Error {
+                        session_id: current_session_id,
+                        message,
+                        recoverable,
+                    });
                 }
                 SessionEvent::Finished { exit_code: code } => {
                     if let Some(code) = code {
@@ -171,6 +204,8 @@ impl GeminiProviderBackend {
                 }
             }
         }
+
+        drop(sink);
 
         let session_id = session_id.unwrap_or_default();
         let backend_label = if backend_label.is_empty() {
@@ -225,6 +260,15 @@ impl ProviderBackend for GeminiProviderBackend {
     }
 
     async fn run_agent(&self, request: AgentRunRequest) -> Result<AgentRunResponse, BackendError> {
+        self.run_agent_streaming(request, NotificationSink::noop())
+            .await
+    }
+
+    async fn run_agent_streaming(
+        &self,
+        request: AgentRunRequest,
+        sink: NotificationSink,
+    ) -> Result<AgentRunResponse, BackendError> {
         let started = Instant::now();
         let session_request = self.build_session_request(&request);
         let model_label = session_request.model.clone();
@@ -233,12 +277,21 @@ impl ProviderBackend for GeminiProviderBackend {
             .start_session(session_request)
             .await
             .map_err(|error| BackendError::SessionStartFailed(error.to_string()))?;
-        self.drain_events(run, started, model_label).await
+        self.drain_events(run, started, model_label, sink).await
     }
 
     async fn resume_agent(
         &self,
         request: AgentResumeRequest,
+    ) -> Result<AgentRunResponse, BackendError> {
+        self.resume_agent_streaming(request, NotificationSink::noop())
+            .await
+    }
+
+    async fn resume_agent_streaming(
+        &self,
+        request: AgentResumeRequest,
+        sink: NotificationSink,
     ) -> Result<AgentRunResponse, BackendError> {
         let started = Instant::now();
         let session_id = request
@@ -252,7 +305,7 @@ impl ProviderBackend for GeminiProviderBackend {
             .resume_session(session_request, &session_id)
             .await
             .map_err(|error| BackendError::SessionStartFailed(error.to_string()))?;
-        self.drain_events(run, started, model_label).await
+        self.drain_events(run, started, model_label, sink).await
     }
 
     async fn cancel_agent(&self, session_id: &str) -> Result<(), BackendError> {

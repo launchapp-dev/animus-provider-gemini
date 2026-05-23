@@ -5,7 +5,9 @@ use std::sync::{Arc, Mutex};
 use animus_plugin_protocol::HealthStatus;
 use animus_provider_gemini::backend::GeminiProviderBackend;
 use animus_provider_gemini::config::GeminiConfig;
-use animus_provider_protocol::{AgentRunRequest, ProviderBackend};
+use animus_provider_protocol::{
+    AgentNotification, AgentRunRequest, NotificationSink, ProviderBackend,
+};
 use animus_session_backend::{
     Result as SessionResult, SessionBackend, SessionBackendInfo, SessionBackendKind,
     SessionCapabilities, SessionEvent, SessionRequest, SessionRun, SessionStability,
@@ -254,6 +256,154 @@ async fn health_healthy_when_gemini_present() {
 
     assert_eq!(health.status, HealthStatus::Healthy);
     assert!(health.last_error.is_none());
+}
+
+#[tokio::test]
+async fn run_agent_streaming_emits_notifications_in_session_order() {
+    let canned = vec![
+        SessionEvent::TextDelta {
+            text: "hel".to_string(),
+        },
+        SessionEvent::Thinking {
+            text: "considering options".to_string(),
+        },
+        SessionEvent::ToolCall {
+            tool_name: "shell".to_string(),
+            arguments: serde_json::json!({"cmd": "echo hi"}),
+            server: Some("local".to_string()),
+        },
+        SessionEvent::ToolResult {
+            tool_name: "shell".to_string(),
+            output: serde_json::json!("hi\n"),
+            success: true,
+        },
+        SessionEvent::Error {
+            message: "transient".to_string(),
+            recoverable: true,
+        },
+        SessionEvent::FinalText {
+            text: "hello world".to_string(),
+        },
+    ];
+
+    let fake = FakeSession::new(canned);
+    let backend =
+        GeminiProviderBackend::with_session(fake, GeminiConfig::for_testing("/usr/bin/true"));
+
+    let recorded: Arc<Mutex<Vec<AgentNotification>>> = Arc::new(Mutex::new(Vec::new()));
+    let recorded_clone = recorded.clone();
+    let sink = NotificationSink::new(move |notification| {
+        recorded_clone.lock().unwrap().push(notification);
+    });
+
+    let response = backend
+        .run_agent_streaming(run_request(Some("gemini-3.1-pro-preview"), "go"), sink)
+        .await
+        .expect("streaming run should succeed");
+
+    assert_eq!(response.output, "hello world");
+    assert_eq!(response.exit_code, 0);
+    assert_eq!(response.session_id, "fake-session-id");
+    assert_eq!(response.tool_calls.len(), 1);
+    assert_eq!(response.tool_results.len(), 1);
+    assert_eq!(response.thinking, vec!["considering options".to_string()]);
+    assert_eq!(response.errors, vec!["transient".to_string()]);
+
+    let frames = recorded.lock().unwrap();
+    assert_eq!(
+        frames.len(),
+        6,
+        "expected 6 streaming notifications, got {:?}",
+        frames
+    );
+
+    match &frames[0] {
+        AgentNotification::Output {
+            session_id,
+            text,
+            is_final,
+        } => {
+            assert_eq!(session_id, "fake-session-id");
+            assert_eq!(text, "hel");
+            assert!(!*is_final);
+        }
+        other => panic!("expected Output, got {other:?}"),
+    }
+    match &frames[1] {
+        AgentNotification::Thinking { session_id, text } => {
+            assert_eq!(session_id, "fake-session-id");
+            assert_eq!(text, "considering options");
+        }
+        other => panic!("expected Thinking, got {other:?}"),
+    }
+    match &frames[2] {
+        AgentNotification::ToolCall {
+            session_id,
+            name,
+            arguments,
+            server,
+        } => {
+            assert_eq!(session_id, "fake-session-id");
+            assert_eq!(name, "shell");
+            assert_eq!(arguments, &serde_json::json!({"cmd": "echo hi"}));
+            assert_eq!(server.as_deref(), Some("local"));
+        }
+        other => panic!("expected ToolCall, got {other:?}"),
+    }
+    match &frames[3] {
+        AgentNotification::ToolResult {
+            session_id,
+            name,
+            output,
+            success,
+        } => {
+            assert_eq!(session_id, "fake-session-id");
+            assert_eq!(name, "shell");
+            assert_eq!(output, &serde_json::json!("hi\n"));
+            assert!(*success);
+        }
+        other => panic!("expected ToolResult, got {other:?}"),
+    }
+    match &frames[4] {
+        AgentNotification::Error {
+            session_id,
+            message,
+            recoverable,
+        } => {
+            assert_eq!(session_id, "fake-session-id");
+            assert_eq!(message, "transient");
+            assert!(*recoverable);
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+    match &frames[5] {
+        AgentNotification::Output {
+            session_id,
+            text,
+            is_final,
+        } => {
+            assert_eq!(session_id, "fake-session-id");
+            assert_eq!(text, "hello world");
+            assert!(*is_final);
+        }
+        other => panic!("expected final Output, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn run_agent_default_path_emits_no_notifications() {
+    let fake = FakeSession::new(vec![SessionEvent::FinalText {
+        text: "done".to_string(),
+    }]);
+    let backend =
+        GeminiProviderBackend::with_session(fake, GeminiConfig::for_testing("/usr/bin/true"));
+
+    let response = backend
+        .run_agent(run_request(Some("gemini-3.1-pro-preview"), "ping"))
+        .await
+        .expect("run_agent should succeed");
+
+    assert_eq!(response.output, "done");
 }
 
 #[tokio::test]
