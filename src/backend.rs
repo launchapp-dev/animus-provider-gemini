@@ -57,9 +57,6 @@ impl GeminiProviderBackend {
         if let Some(contract) = &request.runtime_contract {
             extras.insert("runtime_contract".to_string(), contract.clone());
         }
-        if let Some(mcp) = &request.mcp_servers {
-            extras.insert("mcp_servers".to_string(), mcp.clone());
-        }
         if let Some(tools) = &request.tools {
             extras.insert("tools".to_string(), tools.clone());
         }
@@ -74,6 +71,7 @@ impl GeminiProviderBackend {
             cwd: request.cwd.clone(),
             project_root: request.project_root.clone(),
             mcp_endpoint: None,
+            mcp_servers: request.mcp_servers.clone(),
             permission_mode: request.permission_mode.clone(),
             timeout_secs: request.timeout_secs,
             env_vars,
@@ -211,7 +209,7 @@ impl GeminiProviderBackend {
         let backend_label = if backend_label.is_empty() {
             format!("gemini:{model_label}")
         } else {
-            format!("gemini-native:{model_label}")
+            format!("{backend_label}:{model_label}")
         };
 
         Ok(AgentRunResponse {

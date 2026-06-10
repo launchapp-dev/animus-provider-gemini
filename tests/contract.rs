@@ -427,3 +427,30 @@ async fn manifest_capabilities_sanity() {
     assert!(caps.write_capable);
     assert!(caps.mcp);
 }
+
+#[tokio::test]
+async fn run_agent_passes_mcp_servers_through_to_session_request() {
+    let fake = FakeSession::new(vec![SessionEvent::FinalText {
+        text: "done".to_string(),
+    }]);
+    let started_log = fake.started_log();
+    let backend =
+        GeminiProviderBackend::with_session(fake, GeminiConfig::for_testing("/usr/bin/true"));
+
+    let servers = serde_json::json!({
+        "docs": { "command": "npx", "args": ["-y", "docs-mcp"] }
+    });
+    let mut request = run_request(None, "go");
+    request.mcp_servers = Some(servers.clone());
+
+    backend
+        .run_agent(request)
+        .await
+        .expect("run_agent should succeed");
+
+    let started = started_log.lock().unwrap();
+    assert_eq!(started.len(), 1);
+    assert_eq!(started[0].mcp_servers, Some(servers));
+    assert_eq!(started[0].mcp_endpoint, None);
+    assert!(started[0].extras.get("mcp_servers").is_none());
+}
