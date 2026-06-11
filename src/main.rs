@@ -84,6 +84,11 @@ fn emit_manifest_if_requested() {
                 "name": "GOOGLE_CLOUD_LOCATION",
                 "description": "Google Cloud region used by Vertex AI mode.",
                 "required": false
+            },
+            {
+                "name": "GEMINI_CLI_SYSTEM_SETTINGS_PATH",
+                "description": "Override path for the Gemini CLI system settings file the session backend injects per run.",
+                "required": false
             }
         ]
     });

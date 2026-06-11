@@ -1,6 +1,6 @@
 schema = "animus.plugin.v1"
 name = "animus-provider-gemini"
-version = "0.2.3"
+version = "0.2.5"
 plugin_kind = "provider"
 description = "Google Gemini CLI provider plugin"
 

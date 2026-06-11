@@ -57,11 +57,17 @@ impl GeminiProviderBackend {
         if let Some(contract) = &request.runtime_contract {
             extras.insert("runtime_contract".to_string(), contract.clone());
         }
+        if let Some(system) = &request.system_prompt {
+            extras.insert("system_prompt".to_string(), system.clone().into());
+        }
         if let Some(tools) = &request.tools {
             extras.insert("tools".to_string(), tools.clone());
         }
         if let Some(schema) = &request.response_schema {
             extras.insert("response_schema".to_string(), schema.clone());
+        }
+        for (key, value) in &request.extras {
+            extras.entry(key.clone()).or_insert(value.clone());
         }
 
         SessionRequest {
