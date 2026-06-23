@@ -1,41 +1,29 @@
 [package]
 name = "animus-provider-gemini"
-version = "0.2.6"
+version = "0.3.0"
 edition = "2021"
 license = "MIT"
-description = "Google Gemini CLI provider plugin for Animus"
+description = "Google Gemini provider plugin for Animus (drives the Gemini CLI over ACP)"
 repository = "https://github.com/launchapp-dev/animus-provider-gemini"
 homepage = "https://github.com/launchapp-dev/animus-cli"
 readme = "README.md"
 default-run = "animus-provider-gemini"
-
-[lib]
-name = "animus_provider_gemini"
-path = "src/lib.rs"
 
 [[bin]]
 name = "animus-provider-gemini"
 path = "src/main.rs"
 
 [dependencies]
-animus-plugin-protocol   = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.13.5" }
-animus-provider-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.13.5" }
-animus-plugin-runtime    = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.13.5" }
-animus-session-backend   = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.13.5" }
+# Reuse the shared ACP client. This plugin is a thin wrapper that pins the
+# harness to `gemini --acp` and advertises provider_tool = "gemini", so the
+# kernel routes Gemini models here while ACP stays an internal transport detail.
+animus-provider-acp = { git = "https://github.com/launchapp-dev/animus-provider-acp", tag = "v0.1.1" }
 
-serde = { version = "1", features = ["derive"] }
+animus-plugin-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.17" }
+animus-plugin-runtime  = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.17" }
+
 serde_json = "1"
-
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "process", "sync", "time"] }
-async-trait = "0.1"
-futures = "0.3"
-
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 anyhow = "1"
-thiserror = "1"
-
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-[dev-dependencies]
-tempfile = "3"
-tokio = { version = "1", features = ["test-util", "macros", "rt-multi-thread"] }
