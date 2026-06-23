@@ -2,11 +2,11 @@
 
 A [Google Gemini CLI](https://github.com/google-gemini/gemini-cli) provider plugin for [Animus](https://github.com/launchapp-dev/animus-cli).
 
-> **Status:** Under construction — landing in Animus v0.4.x. This crate currently lives in the Animus core workspace at `crates/animus-provider-gemini/`; v0.4.x extracts it to this standalone repository.
-
 ## What this is
 
-Animus v0.4.0 makes providers (LLM CLI wrappers) pluggable. This repository will ship `animus-provider-gemini`, a stdio plugin that wraps Google's Gemini CLI as an Animus provider. Any workflow phase that targets `tool: gemini` dispatches through this plugin.
+A stdio provider plugin that exposes Google's Gemini CLI as an Animus provider. Any workflow phase that targets `tool: gemini` dispatches through this plugin.
+
+As of v0.3.0 it drives the Gemini CLI over the **Agent Client Protocol (ACP)** — `gemini --acp` — rather than scraping stdout. It is a thin wrapper over the shared ACP client ([`animus-provider-acp`](https://github.com/launchapp-dev/animus-provider-acp)), pinned to the Gemini harness and advertising `provider_tool = "gemini"`. This gives structured streaming + tool events and a **native permission callback**, with every tool call gated through `animus agent approve-hook`. ACP is an internal transport detail; the kernel still routes Gemini models to `tool: gemini` exactly as before.
 
 ## Install (planned)
 

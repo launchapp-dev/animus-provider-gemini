@@ -1,7 +1,20 @@
-use animus_plugin_protocol::{PluginInfo, PLUGIN_KIND_PROVIDER};
-use animus_plugin_runtime::provider_main_with_capabilities;
-use animus_provider_gemini::backend::GeminiProviderBackend;
-use animus_provider_gemini::config::GeminiConfig;
+//! `animus-provider-gemini` — the Animus provider for Google Gemini.
+//!
+//! This is a thin wrapper over the shared ACP client (`animus-provider-acp`).
+//! It advertises `provider_tool = "gemini"` and pins the harness to
+//! `gemini --acp`, so the kernel routes Gemini models here exactly as before
+//! while the plugin drives the Gemini CLI over the Agent Client Protocol
+//! (structured streaming + a native permission callback) instead of scraping
+//! stdout. Every tool call is gated through `animus agent approve-hook` by the
+//! ACP client.
+
+use std::sync::Arc;
+
+use animus_plugin_runtime::{run_provider, ProviderInfo, SessionBackendProvider};
+use animus_provider_acp::backend::AcpSessionBackend;
+use animus_provider_acp::config::AcpConfig;
+
+const DEFAULT_MODEL: &str = "gemini-2.5-flash";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -12,19 +25,34 @@ async fn main() -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    let config = GeminiConfig::from_env()?;
-    let backend = GeminiProviderBackend::new(config);
+    // `GEMINI_DEFAULT_MODEL` overrides the fallback model; `GEMINI_BIN`
+    // overrides the harness binary (default `gemini`). The harness is always
+    // driven in ACP mode (`--acp`).
+    let default_model = std::env::var("GEMINI_DEFAULT_MODEL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_MODEL.to_string());
+    let bin = std::env::var("GEMINI_BIN")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "gemini".to_string());
 
-    let info = PluginInfo {
-        name: env!("CARGO_PKG_NAME").into(),
-        version: env!("CARGO_PKG_VERSION").into(),
-        plugin_kind: PLUGIN_KIND_PROVIDER.into(),
-        description: Some(env!("CARGO_PKG_DESCRIPTION").into()),
+    let config = AcpConfig::for_harness("gemini", bin, ["--acp"], default_model.clone());
+    let backend = Arc::new(AcpSessionBackend::new(config));
+
+    // `ProviderInfo` fields are `&'static str`; leak the (process-lifetime)
+    // default model so a `GEMINI_DEFAULT_MODEL` override is honored.
+    let default_model: &'static str = Box::leak(default_model.into_boxed_str());
+
+    let info = ProviderInfo {
+        plugin_name: env!("CARGO_PKG_NAME"),
+        plugin_version: env!("CARGO_PKG_VERSION"),
+        description: env!("CARGO_PKG_DESCRIPTION"),
+        default_tool: "gemini",
+        default_model,
     };
 
-    let extra_capabilities = vec![];
-
-    provider_main_with_capabilities(info, backend, extra_capabilities).await
+    run_provider(info, SessionBackendProvider::new(backend)).await
 }
 
 fn emit_manifest_if_requested() {
@@ -50,44 +78,29 @@ fn emit_manifest_if_requested() {
         "env_required": [
             {
                 "name": "GEMINI_BIN",
-                "description": "Override the Gemini CLI binary path.",
+                "description": "Override the Gemini CLI binary (default `gemini`). Driven in ACP mode via `--acp`.",
                 "required": false
             },
             {
                 "name": "GEMINI_DEFAULT_MODEL",
-                "description": "Fallback model used when the request omits a model.",
+                "description": "Fallback model used when an agent/run request omits a model.",
                 "required": false
             },
             {
                 "name": "GEMINI_API_KEY",
-                "description": "Gemini API key forwarded to the Gemini CLI.",
+                "description": "API key for the Gemini harness when using API-key auth.",
                 "sensitive": true,
                 "required": false
             },
             {
                 "name": "GOOGLE_API_KEY",
-                "description": "Google API key forwarded to the Gemini CLI.",
+                "description": "Google API key alternative for the Gemini harness.",
                 "sensitive": true,
                 "required": false
             },
             {
-                "name": "GOOGLE_GENAI_USE_VERTEXAI",
-                "description": "Enable Vertex AI mode for Google GenAI clients.",
-                "required": false
-            },
-            {
-                "name": "GOOGLE_CLOUD_PROJECT",
-                "description": "Google Cloud project used by Vertex AI mode.",
-                "required": false
-            },
-            {
-                "name": "GOOGLE_CLOUD_LOCATION",
-                "description": "Google Cloud region used by Vertex AI mode.",
-                "required": false
-            },
-            {
-                "name": "GEMINI_CLI_SYSTEM_SETTINGS_PATH",
-                "description": "Override path for the Gemini CLI system settings file the session backend injects per run.",
+                "name": "ANIMUS_BIN",
+                "description": "Path to the `animus` binary used for the approve-hook approval gate (default: resolved on PATH).",
                 "required": false
             }
         ]
